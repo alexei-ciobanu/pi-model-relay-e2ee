@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci --prefix server
+      - run: npx --yes @biomejs/biome@2.5.4 check extension shared server/src server/test
+      - run: npm run check
+      - run: npm test
+      - run: npx --yes --package @earendil-works/pi-coding-agent@^0.80.7 pi -ne -e . --list-models | grep '^codex-relay-e2ee'

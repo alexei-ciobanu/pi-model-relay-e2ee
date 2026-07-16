@@ -1,0 +1,50 @@
+{
+  "name": "@alexei-ciobanu/codex-relay-e2ee",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "E2EE Codex relay provider for Pi",
+  "author": "Alexei Ciobanu",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "codex",
+    "relay",
+    "e2ee"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexei-ciobanu/codex-relay-e2ee.git"
+  },
+  "pi": {
+    "extensions": [
+      "./extension/index.ts"
+    ]
+  },
+  "files": [
+    "extension",
+    "shared",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "npm --prefix server run check",
+    "test": "npm --prefix server test",
+    "start": "npm --prefix server start",
+    "server:install": "npm --prefix server install",
+    "generate-key": "bash scripts/generate-key.sh"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": ">=0.80.7"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  }
+}
