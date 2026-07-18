@@ -21,10 +21,12 @@ export function extractCompactRequestTemplate(body) {
   return fields;
 }
 
-export function applyNativeReplayPlan(body, plan) {
-  if (!isRecord(body) || !Array.isArray(body.input)) throw new Error("Codex request payload is not replay-compatible");
-  if (!isRecord(plan) || plan.version !== 1 || plan.model !== body.model) {
-    throw new Error("Native replay plan does not match the Codex request");
+export function applyNativeReplayPlan(body, plan, replayPolicy = "canonical-window") {
+  if (!isRecord(body) || !Array.isArray(body.input)) {
+    throw new Error("Responses request payload is not replay-compatible");
+  }
+  if (!isRecord(plan) || plan.version !== 2 || plan.model !== body.model) {
+    throw new Error("Native replay plan does not match the Responses request");
   }
 
   let leadingBoundary = 0;
@@ -34,21 +36,33 @@ export function applyNativeReplayPlan(body, plan) {
     trailingBoundary--;
   for (let index = leadingBoundary; index < trailingBoundary; index++) {
     if (isPromptEnvelopeItem(body.input[index]))
-      throw new Error("Codex request has an unsupported mid-conversation prompt item");
+      throw new Error("Responses request has an unsupported mid-conversation prompt item");
   }
 
   const leading = body.input.slice(0, leadingBoundary).map(clone);
   const trailing = body.input.slice(trailingBoundary).map(clone);
-  if (plan.mode === "replace" && Array.isArray(plan.input)) {
+  if (plan.mode === "replace" && Array.isArray(plan.compactedWindow) && Array.isArray(plan.liveTail)) {
+    const compactedWindow = plan.compactedWindow.map(clone);
+    const liveTail = plan.liveTail.map(clone);
+    if (replayPolicy === "codex-fresh-context") {
+      return {
+        ...body,
+        input: [...compactedWindow, ...leading, ...liveTail, ...trailing],
+      };
+    }
+    const { instructions: _instructions, ...bodyWithoutInstructions } = body;
     return {
-      ...body,
-      input: [...leading, ...plan.input.map(clone), ...trailing],
+      ...bodyWithoutInstructions,
+      input: [...compactedWindow, ...liveTail],
     };
   }
   if (plan.mode === "inject" && Array.isArray(plan.compactedWindow)) {
     return {
       ...body,
-      input: [...leading, ...plan.compactedWindow.map(clone), ...body.input.slice(leadingBoundary).map(clone)],
+      input:
+        replayPolicy === "xai-compaction-head" || replayPolicy === "canonical-window"
+          ? [...plan.compactedWindow.map(clone), ...body.input.map(clone)]
+          : [...leading, ...plan.compactedWindow.map(clone), ...body.input.slice(leadingBoundary).map(clone)],
     };
   }
   throw new Error("Invalid native replay plan");
@@ -62,7 +76,7 @@ export function validateCompactPayload(payload) {
   if (
     payload.request.model !== payload.modelId ||
     !Array.isArray(payload.request.input) ||
-    typeof payload.request.instructions !== "string"
+    (payload.request.instructions !== undefined && typeof payload.request.instructions !== "string")
   ) {
     throw new Error("Invalid encrypted compact request");
   }

@@ -1,14 +1,14 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-export const E2EE_VERSION = 1;
+export const E2EE_VERSION = 2;
 export const E2EE_MAX_CLOCK_SKEW_MS = 60_000;
 const KEY_BYTES = 32;
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
-const PROTOCOL_DOMAIN = "codex-relay-e2ee/v1";
+const PROTOCOL_DOMAIN = "pi-model-relay-e2ee/v2";
 const HKDF_SALT = Buffer.from(PROTOCOL_DOMAIN, "utf8");
-const OPERATIONS = new Set(["stream", "compact"]);
+const OPERATIONS = new Set(["models", "stream", "compact"]);
 
 function decodeBase64Url(value, field) {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) {

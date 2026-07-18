@@ -1,40 +1,48 @@
-# codex-relay-e2ee
+# pi-model-relay-e2ee
 
-An end-to-end encrypted Codex relay for [Pi](https://github.com/earendil-works/pi-mono).
+An end-to-end encrypted relay for models authenticated in
+[Pi](https://github.com/earendil-works/pi).
 
 It has two components:
 
-- a relay server running on a host that owns an `openai-codex` OAuth login
-- a Pi extension that encrypts requests and reconstructs assistant streams on the client
-
-The relay only exposes its authenticated-encryption protocol. It does not provide a
-plaintext OpenAI-compatible API.
+- a relay server on the host that owns Pi provider logins
+- a Pi extension on another machine that discovers and uses those models without copying provider credentials
 
 ```text
-Pi + codex-relay-e2ee extension
+Pi + pi-model-relay-e2ee extension
   -> AES-256-GCM encrypted HTTP
-  -> relay server
-  -> ChatGPT Codex
+  -> relay server + Pi ModelRuntime
+  -> authenticated upstream provider
 ```
+
+The relay exposes Pi's standard assistant event protocol inside authenticated-encryption envelopes. It does not expose
+provider credentials or a plaintext OpenAI-compatible endpoint.
 
 ## Requirements
 
 - Node.js 22.19 or newer on the relay host
-- Pi `0.80.7` or newer on the client
-- an `openai-codex` OAuth login in Pi on the relay host
+- Pi `0.80.10` or newer on the client
+- one or more provider logins or API keys configured on the relay host
 - SSH or another way for the client to reach the loopback-bound relay
 
 ## Relay server
 
-Clone the repository on the OAuth host and install only the server dependencies:
+Clone the repository on the authenticated host and install the server dependencies:
 
 ```bash
-git clone https://github.com/alexei-ciobanu/codex-relay-e2ee.git
-cd codex-relay-e2ee
+git clone https://github.com/alexei-ciobanu/pi-model-relay-e2ee.git
+cd pi-model-relay-e2ee
 npm run server:install
 ```
 
-If needed, create the shared 32-byte key:
+Configure providers in Pi on that host, for example:
+
+```text
+/login openai-codex
+/login xai
+```
+
+Create the shared 32-byte key:
 
 ```bash
 npm run generate-key
@@ -43,7 +51,7 @@ npm run generate-key
 The default key path is:
 
 ```text
-~/.config/codex-relay-e2ee/key
+~/.config/pi-model-relay-e2ee/key
 ```
 
 Start the server:
@@ -52,20 +60,21 @@ Start the server:
 npm start
 ```
 
-The default listener is `http://127.0.0.1:8787`. Configuration:
+The default listener is `http://127.0.0.1:8787`.
 
 | Variable | Default |
 |---|---|
-| `CODEX_RELAY_HOST` | `127.0.0.1` |
-| `CODEX_RELAY_PORT` | `8787` |
-| `CODEX_RELAY_KEY_FILE` | `~/.config/codex-relay-e2ee/key` |
-| `CODEX_RELAY_MAX_BODY_BYTES` | `52428800` |
+| `PI_MODEL_RELAY_HOST` | `127.0.0.1` |
+| `PI_MODEL_RELAY_PORT` | `8787` |
+| `PI_MODEL_RELAY_KEY_FILE` | `~/.config/pi-model-relay-e2ee/key` |
+| `PI_MODEL_RELAY_MAX_BODY_BYTES` | `52428800` |
+| `PI_MODEL_RELAY_ALLOW_PROVIDERS` | all authenticated providers |
+| `PI_MODEL_RELAY_ALLOW_MODELS` | all models on allowed providers |
 
-The relay host must already have a Codex OAuth login. Run Pi there and use:
+Allowlist values are comma-separated. Model allowlist entries use relay IDs such as `xai/grok-4.5`.
 
-```text
-/login openai-codex
-```
+The server detects changes to Pi's `auth.json`, `models.json`, and `models-store.json` and recreates its model runtime
+without requiring a restart.
 
 Health check:
 
@@ -73,59 +82,50 @@ Health check:
 curl http://127.0.0.1:8787/health
 ```
 
-```json
-{"ok":true,"protocol":1,"nativeCompaction":true}
-```
-
 ## Pi extension
 
 Install directly from GitHub on the client:
 
 ```bash
-pi install git:github.com/alexei-ciobanu/codex-relay-e2ee
+pi install git:github.com/alexei-ciobanu/pi-model-relay-e2ee
 ```
 
-Copy the same key from the relay host to:
+Copy the shared key to:
 
 ```text
-~/.config/codex-relay-e2ee/key
+~/.config/pi-model-relay-e2ee/key
 ```
 
 and protect it:
 
 ```bash
-chmod 600 ~/.config/codex-relay-e2ee/key
+chmod 600 ~/.config/pi-model-relay-e2ee/key
 ```
 
-The extension defaults to `http://127.0.0.1:8787`. Optional client overrides:
+Optional client overrides:
 
 ```text
-CODEX_RELAY_URL
-CODEX_RELAY_KEY_FILE
+PI_MODEL_RELAY_URL
+PI_MODEL_RELAY_KEY_FILE
+PI_MODEL_RELAY_MODELS_CACHE_FILE
 ```
 
-Run Pi with a relay model:
+The extension registers the `pi-relay-e2ee` provider. Model IDs include the source provider to avoid collisions:
 
 ```bash
-pi --provider codex-relay-e2ee --model gpt-5.6-luna
+pi --provider pi-relay-e2ee --model xai/grok-4.5
+pi --provider pi-relay-e2ee --model openai-codex/gpt-5.6-luna
 ```
 
-Registered models:
-
-- `gpt-5.3-codex-spark`
-- `gpt-5.4`
-- `gpt-5.4-mini`
-- `gpt-5.5`
-- `gpt-5.6-luna`
-- `gpt-5.6-sol`
-- `gpt-5.6-terra`
+The encrypted catalog is cached for four hours. Opening `/model` participates in Pi's model refresh flow; run
+`pi update --models` to force an immediate refresh.
 
 ## SSH forwarding
 
 Keep the relay bound to loopback and forward it to the client:
 
 ```sshconfig
-Host codex-relay-8787
+Host pi-model-relay-8787
     HostName relay.example.com
     User relay-user
     LocalForward 127.0.0.1:8787 127.0.0.1:8787
@@ -133,10 +133,10 @@ Host codex-relay-8787
 ```
 
 ```bash
-ssh -N codex-relay-8787
+ssh -N pi-model-relay-8787
 ```
 
-## Native OpenAI compaction
+## Native Responses compaction
 
 Install the companion extension:
 
@@ -144,18 +144,18 @@ Install the companion extension:
 pi install git:github.com/alexei-ciobanu/pi-openai-compaction
 ```
 
-The extensions discover each other through an in-process transport registry. Native
-compact requests, responses, and opaque replay plans remain encrypted between the Pi
-client and the relay. No provider allow-list override is needed.
+Native compaction is advertised only for upstream providers with an explicit replay contract: public OpenAI uses its
+canonical compacted window unchanged, OpenAI Codex refreshes current provider context, and xAI treats its singleton
+compact output as the new conversation head. Compact requests, responses, and version 2 replay plans remain inside the
+encrypted relay protocol. Primary-source citations and captured provider documentation are maintained in the
+[`pi-openai-compaction` provider contract documentation](https://github.com/alexei-ciobanu/pi-openai-compaction/blob/main/docs/provider-compaction-contracts.md).
 
 ## Protocol and security
 
 See [`docs/protocol.md`](docs/protocol.md) for the wire protocol and threat model.
 
-The protocol protects prompts, tools, tool arguments, model responses, usage, native
-compaction data, and provider errors from network and TLS-interception observers. It
-does not protect against compromise of either endpoint, key theft, plaintext Pi
-session files, traffic analysis, or denial of service.
+The PSK grants the client access to every model allowed by the server configuration. Protect it like the provider
+credentials it represents.
 
 ## Development
 
@@ -163,10 +163,6 @@ session files, traffic analysis, or denial of service.
 npm run check
 npm test
 ```
-
-The root package is intentionally lightweight so Pi can install the extension without
-installing the relay server's dependency tree. Server dependencies and their lockfile
-live under `server/`.
 
 ## License
 

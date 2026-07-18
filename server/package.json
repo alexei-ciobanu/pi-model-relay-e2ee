@@ -1,15 +1,15 @@
 {
-  "name": "@alexei-ciobanu/codex-relay-e2ee-server",
-  "version": "0.1.0",
+  "name": "@alexei-ciobanu/pi-model-relay-e2ee-server",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "dependencies": {
-    "@earendil-works/pi-ai": "0.80.7",
-    "@earendil-works/pi-coding-agent": "0.80.7"
+    "@earendil-works/pi-ai": "0.80.10",
+    "@earendil-works/pi-coding-agent": "0.80.10"
   },
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/native-compaction.js && node --check ../shared/e2ee.js",
+    "check": "node --check src/index.js && node --check src/model-runtime.js && node --check src/native-compaction.js && node --check ../shared/catalog.js && node --check ../shared/e2ee.js",
     "test": "node --test test/*.test.js"
   }
 }

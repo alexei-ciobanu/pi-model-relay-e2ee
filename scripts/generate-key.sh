@@ -3,7 +3,7 @@ set -euo pipefail
 
 umask 077
 
-DEFAULT_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/codex-relay-e2ee"
+DEFAULT_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pi-model-relay-e2ee"
 OUTPUT_FILE="${1:-$DEFAULT_CONFIG_DIR/key}"
 
 if [[ -e "$OUTPUT_FILE" ]]; then
@@ -22,5 +22,5 @@ if [[ "$size" != "32" ]]; then
   exit 1
 fi
 
-echo "Generated 32-byte codex-relay-e2ee key: $OUTPUT_FILE"
+echo "Generated 32-byte pi-model-relay-e2ee key: $OUTPUT_FILE"
 echo "Copy this file securely to each Pi client at the same default path."

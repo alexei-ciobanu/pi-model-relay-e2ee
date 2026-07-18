@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   type Api,
   type AssistantMessage,
@@ -10,89 +11,40 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+import {
+  RELAY_API,
+  RELAY_PROVIDER,
+  type RelayCatalog,
+  type RelayCatalogModel,
+  validateRelayCatalog,
+} from "../shared/catalog.js";
 import { deriveKey, E2EE_VERSION, loadMasterKey, openJson, requestAad, responseAad, sealJson } from "../shared/e2ee.js";
 
-const PROVIDER = "codex-relay-e2ee";
-const API = "codex-relay-e2ee-v1";
 const MAX_ENCRYPTED_FRAME_BYTES = 64 * 1024 * 1024;
+const CATALOG_TTL_MS = 4 * 60 * 60 * 1000;
+const CATALOG_TIMEOUT_MS = 10_000;
 const TRANSPORT_REGISTRY = Symbol.for("alexei-ciobanu.pi-openai-compaction.transport-registry.v1");
-
-const MODELS = [
-  {
-    id: "gpt-5.3-codex-spark",
-    name: "GPT-5.3 Codex Spark via E2EE relay",
-    reasoning: true,
-    thinkingLevelMap: { minimal: "low", xhigh: "xhigh" },
-    input: ["text"] as const,
-    contextWindow: 128000,
-    maxTokens: 128000,
-    cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-  },
-  {
-    id: "gpt-5.4",
-    name: "GPT-5.4 via E2EE relay",
-    reasoning: true,
-    thinkingLevelMap: { minimal: "low", xhigh: "xhigh" },
-    input: ["text", "image"] as const,
-    contextWindow: 272000,
-    maxTokens: 128000,
-    cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-  },
-  {
-    id: "gpt-5.4-mini",
-    name: "GPT-5.4 mini via E2EE relay",
-    reasoning: true,
-    thinkingLevelMap: { minimal: "low", xhigh: "xhigh" },
-    input: ["text", "image"] as const,
-    contextWindow: 272000,
-    maxTokens: 128000,
-    cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
-  },
-  {
-    id: "gpt-5.5",
-    name: "GPT-5.5 via E2EE relay",
-    reasoning: true,
-    thinkingLevelMap: { minimal: "low", xhigh: "xhigh" },
-    input: ["text", "image"] as const,
-    contextWindow: 272000,
-    maxTokens: 128000,
-    cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-  },
-  ...["luna", "sol", "terra"].map((variant) => {
-    const costs = {
-      luna: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-      sol: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-      terra: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
-    } as const;
-    const title = variant[0].toUpperCase() + variant.slice(1);
-    return {
-      id: `gpt-5.6-${variant}`,
-      name: `GPT-5.6 ${title} via E2EE relay`,
-      reasoning: true,
-      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
-      input: ["text", "image"] as const,
-      contextWindow: 372000,
-      maxTokens: 128000,
-      cost: costs[variant as keyof typeof costs],
-    };
-  }),
-];
 
 // The authenticated wire protocol is validated event-by-event before values reach Pi.
 // biome-ignore lint/suspicious/noExplicitAny: dynamic JSON frames intentionally have provider-defined fields
 type JsonObject = Record<string, any>;
 
 type NativeReplayPlan =
-  | { version: 1; mode: "replace"; model: string; input: unknown[] }
-  | { version: 1; mode: "inject"; model: string; compactedWindow: unknown[] };
+  | { version: 2; mode: "replace"; model: string; compactedWindow: unknown[]; liveTail: unknown[] }
+  | { version: 2; mode: "inject"; model: string; compactedWindow: unknown[] };
 
 type CompactTransportResponse = { status: number; headers?: Record<string, string>; bodyText: string };
 
 type CompactionTransportAdapter = {
   id: string;
   provider: string;
-  apiFamily: "openai-codex-responses";
+  resolveModel(model: string):
+    | {
+        apiFamily: "openai-responses" | "openai-codex-responses";
+        replayPolicy: "canonical-window" | "xai-compaction-head" | "codex-fresh-context";
+      }
+    | undefined;
   executeCompact(args: {
     model: string;
     request: JsonObject;
@@ -104,6 +56,12 @@ type CompactionTransportAdapter = {
 };
 
 type CompactionTransportRegistry = { adapters: Map<string, CompactionTransportAdapter> };
+
+type CatalogCache = {
+  baseUrl: string;
+  checkedAt: number;
+  catalog: RelayCatalog;
+};
 
 function compactionTransportRegistry(): CompactionTransportRegistry {
   const globals = globalThis as typeof globalThis & Record<symbol, unknown>;
@@ -138,13 +96,19 @@ function remoteOptions(options?: SimpleStreamOptions): JsonObject {
 }
 
 function rewriteMessage(message: AssistantMessage, model: Model<Api>): AssistantMessage {
+  const source = {
+    provider: message.provider,
+    api: message.api,
+    model: message.model,
+  };
   return {
     ...message,
     api: model.api,
     provider: model.provider,
     model: model.id,
     content: message.content.map((block) => ({ ...block })),
-  };
+    piRelaySource: source,
+  } as AssistantMessage;
 }
 
 function makeError(model: Model<Api>, error: unknown, partial?: AssistantMessage): AssistantMessage {
@@ -186,8 +150,9 @@ function applyWireEvent(
   state: { partial?: AssistantMessage; terminal: boolean },
   onRequestTemplate?: (model: string, fields: JsonObject) => void,
 ): void {
-  if (!wire || typeof wire !== "object" || typeof wire.type !== "string")
+  if (!wire || typeof wire !== "object" || typeof wire.type !== "string") {
     throw new Error("Invalid encrypted stream event");
+  }
 
   if (wire.type === "request_template") {
     if (
@@ -205,7 +170,7 @@ function applyWireEvent(
   if (wire.type === "fatal") {
     const error = makeError(
       model,
-      typeof wire.message === "string" ? wire.message : "Codex relay failed",
+      typeof wire.message === "string" ? wire.message : "Pi model relay failed",
       state.partial,
     );
     state.terminal = true;
@@ -320,7 +285,7 @@ function encryptedStream(
         ...(nativeReplay ? { nativeReplay } : {}),
       });
 
-      const response = await fetch(`${baseUrl}/e2ee/v1/stream`, {
+      const response = await fetch(`${baseUrl}/e2ee/v2/stream`, {
         method: "POST",
         redirect: "error",
         headers: { "content-type": "application/json" },
@@ -333,9 +298,9 @@ function encryptedStream(
       );
       if (!response.ok) {
         const body = (await response.text()).slice(0, 1024);
-        throw new Error(`Codex E2EE relay returned HTTP ${response.status}${body ? `: ${body}` : ""}`);
+        throw new Error(`Pi model E2EE relay returned HTTP ${response.status}${body ? `: ${body}` : ""}`);
       }
-      if (!response.body) throw new Error("Codex E2EE relay returned no response body");
+      if (!response.body) throw new Error("Pi model E2EE relay returned no response body");
 
       const decoder = new TextDecoder();
       let buffered = "";
@@ -343,8 +308,9 @@ function encryptedStream(
 
       const processLine = (line: string) => {
         if (!line) return;
-        if (Buffer.byteLength(line, "utf8") > MAX_ENCRYPTED_FRAME_BYTES)
+        if (Buffer.byteLength(line, "utf8") > MAX_ENCRYPTED_FRAME_BYTES) {
           throw new Error("Encrypted response frame is too large");
+        }
         const frame = JSON.parse(line) as JsonObject;
         if (frame.v !== E2EE_VERSION || frame.id !== id || frame.sequence !== expectedSequence) {
           throw new Error("Encrypted response frame identity or sequence mismatch");
@@ -403,7 +369,7 @@ async function executeEncryptedCompact(args: {
     sessionId: args.sessionId,
     clientRequestId: args.clientRequestId,
   });
-  const response = await fetch(`${args.baseUrl}/e2ee/v1/compact`, {
+  const response = await fetch(`${args.baseUrl}/e2ee/v2/compact`, {
     method: "POST",
     redirect: "error",
     headers: { "content-type": "application/json" },
@@ -411,14 +377,14 @@ async function executeEncryptedCompact(args: {
     signal: args.signal,
   });
   const responseText = await response.text();
-  if (!response.ok) throw new Error(`Codex E2EE compact relay returned HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`Pi model E2EE compact relay returned HTTP ${response.status}`);
   const frame = JSON.parse(responseText) as JsonObject;
   if (frame.v !== E2EE_VERSION || frame.id !== id || frame.sequence !== 0) {
     throw new Error("Encrypted compact response identity mismatch");
   }
   const wire = openJson(responseKey, responseAad("compact", id, 0), frame) as JsonObject;
   if (wire.type === "compact_error") {
-    throw new Error(typeof wire.message === "string" ? wire.message : "Codex E2EE compact relay failed");
+    throw new Error(typeof wire.message === "string" ? wire.message : "Pi model E2EE compact relay failed");
   }
   if (
     wire.type !== "compact_response" ||
@@ -431,8 +397,88 @@ async function executeEncryptedCompact(args: {
   return { status: wire.status, headers: wire.headers, bodyText: wire.bodyText };
 }
 
-export default function (pi: ExtensionAPI) {
-  const configuredUrl = process.env.CODEX_RELAY_URL || "http://127.0.0.1:8787";
+async function fetchCatalog(args: {
+  baseUrl: string;
+  keyPath: string;
+  signal?: AbortSignal;
+  force?: boolean;
+}): Promise<RelayCatalog> {
+  const masterKey = loadMasterKey(args.keyPath);
+  const requestKey = deriveKey(masterKey, "request");
+  const responseKey = deriveKey(masterKey, "response");
+  const id = randomUUID();
+  const timestamp = Date.now();
+  const sealed = sealJson(requestKey, requestAad("models", id, timestamp), { force: args.force === true });
+  const timeoutSignal = AbortSignal.timeout(CATALOG_TIMEOUT_MS);
+  const signal = args.signal ? AbortSignal.any([args.signal, timeoutSignal]) : timeoutSignal;
+  const response = await fetch(`${args.baseUrl}/e2ee/v2/models`, {
+    method: "POST",
+    redirect: "error",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ v: E2EE_VERSION, id, timestamp, ...sealed }),
+    signal,
+  });
+  const responseText = await response.text();
+  if (!response.ok) throw new Error(`Pi model catalog relay returned HTTP ${response.status}`);
+  if (Buffer.byteLength(responseText, "utf8") > MAX_ENCRYPTED_FRAME_BYTES) {
+    throw new Error("Encrypted model catalog response is too large");
+  }
+  const frame = JSON.parse(responseText) as JsonObject;
+  if (frame.v !== E2EE_VERSION || frame.id !== id || frame.sequence !== 0) {
+    throw new Error("Encrypted model catalog response identity mismatch");
+  }
+  const wire = openJson(responseKey, responseAad("models", id, 0), frame) as JsonObject;
+  if (wire.type === "models_error") {
+    throw new Error(typeof wire.message === "string" ? wire.message : "Pi model catalog relay failed");
+  }
+  if (wire.type !== "models_response") throw new Error("Invalid encrypted model catalog response");
+  return validateRelayCatalog(wire.catalog);
+}
+
+async function readCatalogCache(path: string, baseUrl: string): Promise<CatalogCache | undefined> {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8")) as Partial<CatalogCache>;
+    if (
+      value.baseUrl !== baseUrl ||
+      typeof value.checkedAt !== "number" ||
+      !Number.isSafeInteger(value.checkedAt) ||
+      !value.catalog
+    ) {
+      return undefined;
+    }
+    return {
+      baseUrl,
+      checkedAt: value.checkedAt,
+      catalog: validateRelayCatalog(value.catalog),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function writeCatalogCache(path: string, value: CatalogCache): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  await rename(temporaryPath, path);
+  await chmod(path, 0o600);
+}
+
+function toProviderModels(catalog: RelayCatalog | undefined): ProviderModelConfig[] {
+  return (catalog?.models ?? []).map((model) => ({
+    id: model.id,
+    name: model.name,
+    reasoning: model.reasoning,
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
+    input: [...model.input],
+    cost: structuredClone(model.cost),
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+  }));
+}
+
+export default async function (pi: ExtensionAPI) {
+  const configuredUrl = process.env.PI_MODEL_RELAY_URL || "http://127.0.0.1:8787";
   const parsedUrl = new URL(configuredUrl);
   if (
     !/^https?:$/.test(parsedUrl.protocol) ||
@@ -441,18 +487,37 @@ export default function (pi: ExtensionAPI) {
     parsedUrl.search ||
     parsedUrl.hash
   ) {
-    throw new Error("CODEX_RELAY_URL must be an HTTP(S) origin without credentials, query, or fragment");
+    throw new Error("PI_MODEL_RELAY_URL must be an HTTP(S) origin without credentials, query, or fragment");
   }
   const baseUrl = parsedUrl.toString().replace(/\/$/, "");
-  const defaultKeyPath = join(homedir(), ".config", "codex-relay-e2ee", "key");
-  const keyPath = process.env.CODEX_RELAY_KEY_FILE || defaultKeyPath;
+  const configDir = join(homedir(), ".config", "pi-model-relay-e2ee");
+  const keyPath = process.env.PI_MODEL_RELAY_KEY_FILE || join(configDir, "key");
+  const cachePath = process.env.PI_MODEL_RELAY_MODELS_CACHE_FILE || join(configDir, "models-cache.json");
+
+  let cache = await readCatalogCache(cachePath, baseUrl);
+  let catalog = cache?.catalog;
+  let catalogError: string | undefined;
+  if (!cache || Date.now() - cache.checkedAt >= CATALOG_TTL_MS) {
+    try {
+      catalog = await fetchCatalog({ baseUrl, keyPath });
+      cache = { baseUrl, checkedAt: Date.now(), catalog };
+      await writeCatalogCache(cachePath, cache);
+    } catch (error) {
+      catalogError = error instanceof Error ? error.message : String(error);
+    }
+  }
 
   const replayPlans = new Map<string, NativeReplayPlan>();
   const requestTemplates = new Map<string, { model: string; fields: JsonObject }>();
+  const catalogModel = (modelId: string): RelayCatalogModel | undefined =>
+    catalog?.models.find((model) => model.id === modelId);
   const adapter: CompactionTransportAdapter = {
-    id: "codex-relay-e2ee-native-compaction-v1",
-    provider: PROVIDER,
-    apiFamily: "openai-codex-responses",
+    id: "pi-model-relay-e2ee-native-compaction-v2",
+    provider: RELAY_PROVIDER,
+    resolveModel(model) {
+      const support = catalogModel(model)?.nativeCompaction;
+      return support ? { ...support } : undefined;
+    },
     async executeCompact(args) {
       const template = args.sessionId ? requestTemplates.get(args.sessionId) : undefined;
       const request =
@@ -472,14 +537,37 @@ export default function (pi: ExtensionAPI) {
       else replayPlans.delete(sessionId);
     },
   };
-  compactionTransportRegistry().adapters.set(PROVIDER, adapter);
+  compactionTransportRegistry().adapters.set(RELAY_PROVIDER, adapter);
 
-  pi.registerProvider(PROVIDER, {
-    name: "Codex E2EE Relay",
+  pi.registerProvider(RELAY_PROVIDER, {
+    name: "Pi Model E2EE Relay",
     baseUrl,
     apiKey: "e2ee-psk",
-    api: API,
-    models: MODELS.map((model) => ({ ...model, input: [...model.input] })),
+    api: RELAY_API,
+    models: toProviderModels(catalog),
+    async refreshModels(context) {
+      const stored = await readCatalogCache(cachePath, baseUrl);
+      if (stored && (!catalog || stored.catalog.revision !== catalog.revision)) {
+        cache = stored;
+        catalog = stored.catalog;
+      }
+      if (!context.allowNetwork) return toProviderModels(catalog);
+      if (!context.force && cache && Date.now() - cache.checkedAt < CATALOG_TTL_MS) {
+        return toProviderModels(catalog);
+      }
+      try {
+        const refreshed = await fetchCatalog({ baseUrl, keyPath, signal: context.signal, force: context.force });
+        catalog = refreshed;
+        cache = { baseUrl, checkedAt: Date.now(), catalog: refreshed };
+        await writeCatalogCache(cachePath, cache);
+        catalogError = undefined;
+        return toProviderModels(refreshed);
+      } catch (error) {
+        catalogError = error instanceof Error ? error.message : String(error);
+        if (catalog) return toProviderModels(catalog);
+        throw error;
+      }
+    },
     streamSimple: (model, context, options) => {
       const sessionId = options?.sessionId;
       const nativeReplay = sessionId ? replayPlans.get(sessionId) : undefined;
@@ -493,9 +581,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     try {
       loadMasterKey(keyPath);
+      if (catalogError && ctx.hasUI) ctx.ui.notify(`pi-model-relay-e2ee: ${catalogError}`, "warning");
     } catch (error) {
       if (ctx.hasUI) {
-        ctx.ui.notify(`codex-relay-e2ee: ${error instanceof Error ? error.message : String(error)}`, "error");
+        ctx.ui.notify(`pi-model-relay-e2ee: ${error instanceof Error ? error.message : String(error)}`, "error");
       }
     }
   });
@@ -504,6 +593,6 @@ export default function (pi: ExtensionAPI) {
     replayPlans.clear();
     requestTemplates.clear();
     const registry = compactionTransportRegistry();
-    if (registry.adapters.get(PROVIDER) === adapter) registry.adapters.delete(PROVIDER);
+    if (registry.adapters.get(RELAY_PROVIDER) === adapter) registry.adapters.delete(RELAY_PROVIDER);
   });
 }

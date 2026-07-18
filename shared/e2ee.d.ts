@@ -1,7 +1,7 @@
-export const E2EE_VERSION: 1;
+export const E2EE_VERSION: 2;
 export const E2EE_MAX_CLOCK_SKEW_MS: number;
 
-export type E2EEOperation = "stream" | "compact";
+export type E2EEOperation = "models" | "stream" | "compact";
 export type EncryptedEnvelope = Record<string, unknown> & {
   nonce: string;
   ciphertext: string;

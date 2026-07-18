@@ -1,20 +1,21 @@
 {
-  "name": "@alexei-ciobanu/codex-relay-e2ee",
-  "version": "0.1.0",
+  "name": "@alexei-ciobanu/pi-model-relay-e2ee",
+  "version": "0.3.0",
   "type": "module",
-  "description": "E2EE Codex relay provider for Pi",
+  "description": "End-to-end encrypted relay for authenticated Pi models",
   "author": "Alexei Ciobanu",
   "license": "MIT",
   "keywords": [
     "pi-package",
     "pi-extension",
-    "codex",
+    "models",
+    "xai",
     "relay",
     "e2ee"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/alexei-ciobanu/codex-relay-e2ee.git"
+    "url": "https://github.com/alexei-ciobanu/pi-model-relay-e2ee.git"
   },
   "pi": {
     "extensions": [
@@ -37,7 +38,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": ">=0.80.7"
+    "@earendil-works/pi-coding-agent": ">=0.80.10"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-ai": {

@@ -18,4 +18,4 @@ jobs:
       - run: npx --yes @biomejs/biome@2.5.4 check extension shared server/src server/test
       - run: npm run check
       - run: npm test
-      - run: npx --yes --package @earendil-works/pi-coding-agent@^0.80.7 pi -ne -e . --list-models | grep '^codex-relay-e2ee'
+      - run: npx --yes --package @earendil-works/pi-coding-agent@^0.80.10 pi -ne -e . --list-models
