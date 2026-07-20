@@ -22,7 +22,12 @@ import {
   validateRequestEnvelope,
 } from "../../shared/e2ee.js";
 import { createRelayModelRuntimeManager } from "./model-runtime.js";
-import { applyNativeReplayPlan, extractCompactRequestTemplate, validateCompactPayload } from "./native-compaction.js";
+import {
+  applyNativeReplayPlan,
+  extractCompactRequestTemplate,
+  validateCompactPayload,
+  validateNativeReplayPlan,
+} from "./native-compaction.js";
 
 const HOST = process.env.PI_MODEL_RELAY_HOST || "127.0.0.1";
 const PORT = Number(process.env.PI_MODEL_RELAY_PORT || "8787");
@@ -173,10 +178,7 @@ function validateStreamPayload(payload) {
     throw new Error("Invalid encrypted stream request");
   }
   if (payload.nativeReplay !== undefined) {
-    const plan = payload.nativeReplay;
-    if (!plan || typeof plan !== "object" || plan.version !== 1 || plan.model !== payload.modelId) {
-      throw new Error("Invalid encrypted native replay plan");
-    }
+    validateNativeReplayPlan(payload.nativeReplay, payload.modelId);
   }
   return payload;
 }

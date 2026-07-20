@@ -68,6 +68,25 @@ export function applyNativeReplayPlan(body, plan, replayPolicy = "canonical-wind
   throw new Error("Invalid native replay plan");
 }
 
+export function validateNativeReplayPlan(plan, modelId) {
+  if (!isRecord(plan) || plan.version !== 2 || plan.model !== modelId) {
+    throw new Error("Invalid encrypted native replay plan");
+  }
+  if (plan.mode === "replace") {
+    if (!Array.isArray(plan.compactedWindow) || !Array.isArray(plan.liveTail)) {
+      throw new Error("Invalid encrypted native replay plan");
+    }
+    return plan;
+  }
+  if (plan.mode === "inject") {
+    if (!Array.isArray(plan.compactedWindow)) {
+      throw new Error("Invalid encrypted native replay plan");
+    }
+    return plan;
+  }
+  throw new Error("Invalid encrypted native replay plan");
+}
+
 export function validateCompactPayload(payload) {
   if (!isRecord(payload) || typeof payload.modelId !== "string" || !payload.modelId) {
     throw new Error("Invalid encrypted compact request");

@@ -1,6 +1,6 @@
 {
   "name": "@alexei-ciobanu/pi-model-relay-e2ee",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "description": "End-to-end encrypted relay for authenticated Pi models",
   "author": "Alexei Ciobanu",

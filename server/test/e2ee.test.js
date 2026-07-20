@@ -25,6 +25,7 @@ import {
   applyNativeReplayPlan,
   extractCompactRequestTemplate,
   validateCompactPayload,
+  validateNativeReplayPlan,
 } from "../src/native-compaction.js";
 
 test("request and response keys are direction-separated", () => {
@@ -147,6 +148,30 @@ test("native replay injects an older opaque window into Pi fallback compaction",
     compactedWindow: [{ type: "compaction", encrypted_content: "opaque" }],
   });
   assert.deepEqual(rewritten.input, [{ type: "compaction", encrypted_content: "opaque" }, body.input[0]]);
+});
+
+test("stream protocol accepts version 2 native replay plans used after compaction", () => {
+  const replacePlan = {
+    version: 2,
+    mode: "replace",
+    model: "xai/grok-4.5",
+    compactedWindow: [{ type: "compaction", encrypted_content: "opaque-xai" }],
+    liveTail: [{ role: "user", content: "continue after compact" }],
+  };
+  const injectPlan = {
+    version: 2,
+    mode: "inject",
+    model: "xai/grok-4.5",
+    compactedWindow: [{ type: "compaction", encrypted_content: "opaque-xai" }],
+  };
+
+  assert.equal(validateNativeReplayPlan(replacePlan, "xai/grok-4.5"), replacePlan);
+  assert.equal(validateNativeReplayPlan(injectPlan, "xai/grok-4.5"), injectPlan);
+  assert.throws(() => validateNativeReplayPlan({ ...replacePlan, version: 1 }, "xai/grok-4.5"));
+  assert.throws(() => validateNativeReplayPlan({ ...replacePlan, model: "openai/gpt-5.6" }, "xai/grok-4.5"));
+  assert.throws(() =>
+    validateNativeReplayPlan({ version: 2, mode: "replace", model: "xai/grok-4.5", compactedWindow: [] }, "xai/grok-4.5"),
+  );
 });
 
 test("xAI native replay keeps the opaque compaction item first", () => {
