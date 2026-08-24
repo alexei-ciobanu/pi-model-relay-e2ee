@@ -66,8 +66,11 @@ Native compaction capability is advertised per model with an API family and an e
 OpenAI Codex uses `openai-codex-responses`; public OpenAI and xAI use `openai-responses`. Other
 Responses-compatible providers are not assumed to support native compaction without primary-source evidence.
 
-The compact endpoint resolves authentication through the same Pi model runtime, calls the provider's compact endpoint,
-and encrypts the complete upstream status and body for the client.
+The compact endpoint resolves authentication through the same Pi model runtime and encrypts the complete result for
+the client. Public OpenAI and xAI use their standalone compact endpoints. Codex uses a streamed normal Responses
+request with a trailing `compaction_trigger` and the `remote_compaction_v2` beta feature; the relay extracts exactly
+one opaque compaction item and normalizes retained user messages plus that item into the existing encrypted response
+contract.
 
 For later requests, the client sends a version 2 encrypted replay plan that separates the complete compacted window
 from the live post-compaction tail. The server applies it only after Pi builds the real provider payload. It preserves

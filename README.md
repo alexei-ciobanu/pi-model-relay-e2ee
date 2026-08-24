@@ -145,9 +145,9 @@ pi install git:github.com/alexei-ciobanu/pi-openai-compaction
 ```
 
 Native compaction is advertised only for upstream providers with an explicit replay contract: public OpenAI uses its
-canonical compacted window unchanged, OpenAI Codex refreshes current provider context, and xAI treats its singleton
-compact output as the new conversation head. Compact requests, responses, and version 2 replay plans remain inside the
-encrypted relay protocol. Primary-source citations and captured provider documentation are maintained in the
+canonical compacted window unchanged, OpenAI Codex uses Responses compaction v2 and refreshes current provider context,
+and xAI treats its singleton compact output as the new conversation head. Compact requests, responses, and version 2
+replay plans remain inside the encrypted relay protocol. Primary-source citations and captured provider documentation are maintained in the
 [`pi-openai-compaction` provider contract documentation](https://github.com/alexei-ciobanu/pi-openai-compaction/blob/main/docs/provider-compaction-contracts.md).
 
 ## Protocol and security
