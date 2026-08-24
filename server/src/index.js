@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -23,7 +24,10 @@ import {
 } from "../../shared/e2ee.js";
 import { createRelayModelRuntimeManager } from "./model-runtime.js";
 import {
+  applyCodexRemoteCompactionHeaders,
   applyNativeReplayPlan,
+  buildCompactUrl,
+  executeCodexRemoteCompactionRequest,
   extractCompactRequestTemplate,
   validateCompactPayload,
   validateNativeReplayPlan,
@@ -35,6 +39,20 @@ const MAX_BODY_BYTES = Number(process.env.PI_MODEL_RELAY_MAX_BODY_BYTES || 50 * 
 const KEY_FILE = process.env.PI_MODEL_RELAY_KEY_FILE || join(homedir(), ".config", "pi-model-relay-e2ee", "key");
 const REPLAY_TTL_MS = 2 * 60_000;
 const MAX_ENCRYPTED_FRAME_BYTES = 64 * 1024 * 1024;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function resolveCodexInstallationId() {
+  const codexHome = process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
+  try {
+    const installationId = readFileSync(join(codexHome, "installation_id"), "utf8").trim();
+    if (UUID_RE.test(installationId)) return installationId.toLowerCase();
+  } catch {
+    // This identity header is a parity hint; a process-local UUID is a safe fallback.
+  }
+  return randomUUID();
+}
+
+const CODEX_INSTALLATION_ID = resolveCodexInstallationId();
 
 function parseCsvSet(value) {
   const entries = value
@@ -259,16 +277,6 @@ function accountIdFromJwt(token) {
   }
 }
 
-function buildCompactUrl(baseUrl, apiFamily) {
-  const normalized = baseUrl.replace(/\/+$/, "");
-  if (apiFamily === "openai-codex-responses") {
-    if (normalized.endsWith("/codex/responses")) return `${normalized}/compact`;
-    if (normalized.endsWith("/codex")) return `${normalized}/responses/compact`;
-    return `${normalized}/codex/responses/compact`;
-  }
-  return normalized.endsWith("/responses") ? `${normalized}/compact` : `${normalized}/responses/compact`;
-}
-
 async function buildCompactTarget(runtime, model, support, payload) {
   const resolution = await runtime.getAuth(model);
   if (!resolution) throw new Error(`No Pi authentication configured for ${model.provider}`);
@@ -291,6 +299,10 @@ async function buildCompactTarget(runtime, model, support, payload) {
     headers.set("chatgpt-account-id", accountId);
     headers.set("originator", "pi");
     headers.set("openai-beta", "responses=experimental");
+    applyCodexRemoteCompactionHeaders(headers, {
+      installationId: CODEX_INSTALLATION_ID,
+      sessionId: payload.sessionId,
+    });
   }
 
   const baseUrl = resolution.auth.baseUrl ?? model.baseUrl;
@@ -349,20 +361,37 @@ async function encryptedCompact(req, res) {
     const support = nativeCompactionSupport(model);
     if (!support) throw new Error(`Native compaction is unsupported for ${payload.modelId}`);
     const target = await buildCompactTarget(runtime, model, support, payload);
-    const request = { ...payload.request, model: model.id };
-    const upstream = await fetch(target.url, {
-      method: "POST",
-      headers: target.headers,
-      body: JSON.stringify(request),
-      signal: abortController.signal,
-    });
-    const responseHeaders = Object.fromEntries(upstream.headers.entries());
-    const bodyText = await upstream.text();
+    const codexRemoteV2 = support.apiFamily === "openai-codex-responses";
+    let upstreamResult;
+    if (codexRemoteV2) {
+      upstreamResult = await executeCodexRemoteCompactionRequest({
+        fetchImpl: fetch,
+        url: target.url,
+        headers: target.headers,
+        request: payload.request,
+        modelId: model.id,
+        sessionId: payload.sessionId,
+        signal: abortController.signal,
+      });
+    } else {
+      const request = { ...payload.request, model: model.id };
+      const upstream = await fetch(target.url, {
+        method: "POST",
+        headers: target.headers,
+        body: JSON.stringify(request),
+        signal: abortController.signal,
+      });
+      upstreamResult = {
+        status: upstream.status,
+        headers: Object.fromEntries(upstream.headers.entries()),
+        bodyText: await upstream.text(),
+      };
+    }
     return sendEncryptedJson(res, "compact", envelope.id, {
       type: "compact_response",
-      status: upstream.status,
-      headers: responseHeaders,
-      bodyText,
+      status: upstreamResult.status,
+      headers: upstreamResult.headers,
+      bodyText: upstreamResult.bodyText,
     });
   } catch (error) {
     if (abortController.signal.aborted || res.destroyed || res.writableEnded) return;
@@ -452,6 +481,7 @@ const requestHandler = async (req, res) => {
         provider: RELAY_PROVIDER,
         encryptedModels: true,
         nativeCompaction: true,
+        nativeCompactionProtocols: { codex: "responses_compaction_v2" },
       });
     }
     if (req.method === "POST" && url.pathname === "/e2ee/v2/models") return encryptedModels(req, res);
