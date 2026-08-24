@@ -72,6 +72,11 @@ request with a trailing `compaction_trigger` and the `remote_compaction_v2` beta
 one opaque compaction item and normalizes retained user messages plus that item into the existing encrypted response
 contract.
 
+This normal streaming route replaced the unavailable internal Codex `/backend-api/codex/responses/compact` route; it
+does not imply deprecation of the separately documented public OpenAI `/v1/responses/compact` API. The migration record
+and diagnosis checklist are maintained in the companion extension's
+[`Codex remote compaction v2 note`](https://github.com/alexei-ciobanu/pi-openai-compaction/blob/main/docs/codex-remote-compaction-v2.md).
+
 For later requests, the client sends a version 2 encrypted replay plan that separates the complete compacted window
 from the live post-compaction tail. The server applies it only after Pi builds the real provider payload. It preserves
 public OpenAI's canonical window unchanged, removes fresh prompt envelopes for xAI, and injects fresh provider-authored

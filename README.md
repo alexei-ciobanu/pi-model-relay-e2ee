@@ -150,6 +150,12 @@ and xAI treats its singleton compact output as the new conversation head. Compac
 replay plans remain inside the encrypted relay protocol. Primary-source citations and captured provider documentation are maintained in the
 [`pi-openai-compaction` provider contract documentation](https://github.com/alexei-ciobanu/pi-openai-compaction/blob/main/docs/provider-compaction-contracts.md).
 
+The public OpenAI `/v1/responses/compact` endpoint is distinct from the Codex subscription backend. The legacy internal
+`/backend-api/codex/responses/compact` route returned 404 during the v2 migration investigation; Codex now uses the normal
+streamed `/backend-api/codex/responses` route with a trailing `compaction_trigger`. The complete migration record,
+request/response flow, checkpoint semantics, encryption-layer distinction, and regression checklist are in the
+[`Codex remote compaction v2 migration note`](https://github.com/alexei-ciobanu/pi-openai-compaction/blob/main/docs/codex-remote-compaction-v2.md).
+
 ## Protocol and security
 
 See [`docs/protocol.md`](docs/protocol.md) for the wire protocol and threat model.
